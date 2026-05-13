@@ -36,3 +36,4 @@ slowapi
 joblib
 scikit-learn
 yfinance
+httpx
