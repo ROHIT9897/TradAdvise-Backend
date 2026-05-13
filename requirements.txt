@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+redis
+requests
+pydantic
+pandas
+numpy
+beautifulsoup4
