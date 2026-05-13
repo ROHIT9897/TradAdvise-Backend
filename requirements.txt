@@ -37,3 +37,4 @@ slowapi
 joblib
 sckit-learn
 htppx
+yfinance
