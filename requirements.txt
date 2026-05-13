@@ -36,5 +36,5 @@ xgboost==3.2.0
 slowapi
 joblib
 scikit-learn
-htppx
+httpx
 yfinance
