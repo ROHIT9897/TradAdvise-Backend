@@ -13,3 +13,4 @@ redis-data/
 *.egg-info/
 dist/
 build/
+firebase-adminsdk.json
