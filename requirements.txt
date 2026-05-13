@@ -7,3 +7,4 @@ pydantic
 pandas
 numpy
 beautifulsoup4
+sentry-sdk
