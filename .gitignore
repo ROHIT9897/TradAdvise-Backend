@@ -1,0 +1,15 @@
+# Secret files — never upload these
+.env
+*.pkl
+models/
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+redis-data/
+*.log
+.idea/
+*.egg-info/
+dist/
+build/
