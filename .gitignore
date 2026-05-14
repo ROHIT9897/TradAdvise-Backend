@@ -14,3 +14,4 @@ redis-data/
 dist/
 build/
 firebase-adminsdk.json
+*.json
