@@ -2,10 +2,9 @@
 import httpx
 import logging
 import asyncio
-import os
 from cache.redis_client import cache
 from config import settings
-from data.fetcher import format_ticker, IS_CLOUD
+from data.fetcher import NSE_HEADERS
 
 logger = logging.getLogger(__name__)
 
@@ -16,108 +15,116 @@ async def get_live_price(ticker: str) -> dict:
     if cached:
         return {**cached, "cached": True}
 
-    # Try multiple methods
-    result = None
-
-    if IS_CLOUD:
-        # On cloud — use Alpha Vantage quote or Stooq
-        result = await _fetch_price_alpha_vantage(ticker)
-        if not result:
-            result = await _fetch_price_from_history(ticker)
-    else:
-        # Local — use yfinance fast_info
-        result = await _fetch_price_yfinance(ticker)
-        if not result:
-            result = await _fetch_price_from_history(ticker)
+    # Try sources in order
+    result = (
+        await _price_from_nse_quote(ticker) or
+        await _price_from_yahoo_proxy(ticker) or
+        await _price_from_history(ticker)
+    )
 
     if not result:
-        raise Exception(f"Could not fetch live price for {ticker}")
+        raise Exception(f"All price sources failed for {ticker}")
 
     await cache.set(cache_key, result, settings.LIVE_PRICE_TTL)
     await cache.set(f"live_price_stale:{ticker}", result, 3600)
     return result
 
-async def _fetch_price_yfinance(ticker: str) -> dict:
+async def _price_from_nse_quote(ticker: str) -> dict:
+    """NSE India real-time quote — best source for Indian stocks."""
     try:
-        import yfinance as yf
-        formatted = format_ticker(ticker)
+        clean = ticker.replace(".NS", "").replace(".BO", "").upper()
+        url   = f"https://www.nseindia.com/api/quote-equity?symbol={clean}"
 
-        def _fetch():
-            stock    = yf.Ticker(formatted)
-            info     = stock.fast_info
-            price    = info.last_price
-            prev     = info.previous_close
-            if not price:
-                return None
-            change     = price - prev
-            change_pct = (change / prev) * 100
-            return {
-                "ticker":         ticker,
-                "price":          round(float(price), 2),
-                "previous_close": round(float(prev), 2),
-                "change":         round(float(change), 2),
-                "change_pct":     round(float(change_pct), 2),
-                "day_high":       round(float(info.day_high or price), 2),
-                "day_low":        round(float(info.day_low or price), 2),
-                "volume":         int(info.shares or 0),
-                "cached":         False
-            }
+        async with httpx.AsyncClient(
+            headers          = NSE_HEADERS,
+            timeout          = 15,
+            follow_redirects = True
+        ) as client:
+            await client.get("https://www.nseindia.com", timeout=10)
+            response = await client.get(url)
 
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, _fetch)
-    except Exception as e:
-        logger.warning(f"yfinance price failed for {ticker}: {e}")
-        return None
-
-async def _fetch_price_alpha_vantage(ticker: str) -> dict:
-    try:
-        if not settings.ALPHA_VANTAGE_KEY:
+        if response.status_code != 200:
             return None
 
-        clean = ticker.replace(".NS", "").replace(".BO", "")
-        url   = "https://www.alphavantage.co/query"
-        params = {
-            "function": "GLOBAL_QUOTE",
-            "symbol":   f"NSE:{clean}",
-            "apikey":   settings.ALPHA_VANTAGE_KEY
-        }
+        data  = response.json()
+        price_data = data.get("priceInfo", {})
 
-        async with httpx.AsyncClient(timeout=15) as client:
-            response = await client.get(url, params=params)
-            data     = response.json()
+        price      = float(price_data.get("lastPrice", 0))
+        prev_close = float(price_data.get("previousClose", price))
+        change     = price - prev_close
+        change_pct = (change / prev_close * 100) if prev_close else 0
 
-        quote = data.get("Global Quote", {})
-        if not quote or not quote.get("05. price"):
+        if not price:
             return None
-
-        price      = float(quote["05. price"])
-        prev       = float(quote["08. previous close"])
-        change     = float(quote["09. change"])
-        change_pct = float(quote["10. change percent"].replace("%", ""))
 
         return {
             "ticker":         ticker,
             "price":          round(price, 2),
-            "previous_close": round(prev, 2),
+            "previous_close": round(prev_close, 2),
             "change":         round(change, 2),
             "change_pct":     round(change_pct, 2),
-            "day_high":       round(float(quote.get("03. high", price)), 2),
-            "day_low":        round(float(quote.get("04. low", price)), 2),
-            "volume":         int(quote.get("06. volume", 0)),
+            "day_high":       round(float(price_data.get("intraDayHighLow", {}).get("max", price)), 2),
+            "day_low":        round(float(price_data.get("intraDayHighLow", {}).get("min", price)), 2),
+            "volume":         int(data.get("marketDeptOrderBook", {}).get("tradeInfo", {}).get("totalTradedVolume", 0)),
             "cached":         False
         }
+
     except Exception as e:
-        logger.warning(f"Alpha Vantage price failed for {ticker}: {e}")
+        logger.warning(f"NSE quote failed for {ticker}: {e}")
         return None
 
-async def _fetch_price_from_history(ticker: str) -> dict:
-    """
-    Fallback — get latest price from historical data.
-    Not real-time but better than nothing.
-    """
+async def _price_from_yahoo_proxy(ticker: str) -> dict:
+    """Yahoo Finance API direct — works without yfinance library."""
+    try:
+        clean     = ticker.replace(".NS", "").replace(".BO", "")
+        yf_ticker = f"{clean}.NS"
+        url       = f"https://query1.finance.yahoo.com/v8/finance/chart/{yf_ticker}"
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/120.0.0.0 Safari/537.36",
+            "Referer":    "https://finance.yahoo.com/",
+        }
+
+        async with httpx.AsyncClient(headers=headers, timeout=15) as client:
+            response = await client.get(url, params={"range": "1d", "interval": "1m"})
+
+        data   = response.json()
+        result = data.get("chart", {}).get("result", [])
+        if not result:
+            return None
+
+        meta       = result[0].get("meta", {})
+        price      = float(meta.get("regularMarketPrice", 0))
+        prev_close = float(meta.get("chartPreviousClose", price))
+        change     = price - prev_close
+        change_pct = (change / prev_close * 100) if prev_close else 0
+
+        if not price:
+            return None
+
+        return {
+            "ticker":         ticker,
+            "price":          round(price, 2),
+            "previous_close": round(prev_close, 2),
+            "change":         round(change, 2),
+            "change_pct":     round(change_pct, 2),
+            "day_high":       round(float(meta.get("regularMarketDayHigh", price)), 2),
+            "day_low":        round(float(meta.get("regularMarketDayLow", price)), 2),
+            "volume":         int(meta.get("regularMarketVolume", 0)),
+            "cached":         False
+        }
+
+    except Exception as e:
+        logger.warning(f"Yahoo proxy price failed for {ticker}: {e}")
+        return None
+
+async def _price_from_history(ticker: str) -> dict:
+    """Fallback — get latest close from historical data."""
     try:
         from data.fetcher import get_historical_data
-        df = await get_historical_data(ticker, period="5d", use_cache=False)
+        df = await get_historical_data(ticker, period="7d", use_cache=False)
         if df.empty:
             return None
 
@@ -126,22 +133,22 @@ async def _fetch_price_from_history(ticker: str) -> dict:
         price    = float(latest["close"])
         prev     = float(previous["close"])
         change   = price - prev
-        change_pct = (change / prev) * 100
+        pct      = (change / prev * 100) if prev else 0
 
         return {
             "ticker":         ticker,
             "price":          round(price, 2),
             "previous_close": round(prev, 2),
             "change":         round(change, 2),
-            "change_pct":     round(change_pct, 2),
+            "change_pct":     round(pct, 2),
             "day_high":       round(float(latest["high"]), 2),
             "day_low":        round(float(latest["low"]), 2),
             "volume":         int(latest["volume"]),
             "cached":         False,
-            "note":           "Delayed data"
+            "note":           "Delayed — live price unavailable"
         }
     except Exception as e:
-        logger.warning(f"History price fallback failed for {ticker}: {e}")
+        logger.warning(f"History fallback failed for {ticker}: {e}")
         return None
 
 async def get_top_gainers_losers() -> dict:
@@ -158,10 +165,9 @@ async def get_top_gainers_losers() -> dict:
         return cached
 
     results = []
-    for ticker in NIFTY50:
+    for t in NIFTY50:
         try:
-            data = await get_live_price(ticker)
-            results.append(data)
+            results.append(await get_live_price(t))
         except:
             continue
 
@@ -171,6 +177,5 @@ async def get_top_gainers_losers() -> dict:
         "top_gainers": results[-5:][::-1],
         "top_losers":  results[:5],
     }
-
     await cache.set(cache_key, output, 300)
     return output
