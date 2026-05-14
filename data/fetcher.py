@@ -10,6 +10,7 @@ from config import settings
 from datetime import timezone
 import pytz
 import asyncio
+import time
 
 
 
@@ -57,15 +58,30 @@ async def fetch_from_yfinance(
     formatted = format_indian_ticker(ticker)
     logger.info(f"Fetching {formatted} from yfinance")
 
-    import asyncio
     loop = asyncio.get_event_loop()
 
     def _fetch():
-        stock = yf.Ticker(formatted)
-        df = stock.history(period=period, interval=interval)
+        last_err = None
+        df = pd.DataFrame()  # empty default
+
+        for attempt in range(3):  # 3 baar try karega
+            try:
+                stock = yf.Ticker(formatted)
+                df = stock.history(period=period, interval=interval)
+
+                if not df.empty:
+                    break  # Data mil gaya, loop band karo
+
+                logger.warning(f"Attempt {attempt+1}: Empty data for {formatted}")
+
+            except Exception as e:
+                last_err = e
+                logger.warning(f"Attempt {attempt+1} failed for {formatted}: {e}")
+
+            time.sleep(2)  # 2 sec wait karo next try se pehle
 
         if df.empty:
-            raise ValueError(f"No data returned for {formatted}")
+            raise ValueError(f"No data returned for {formatted}. Last error: {last_err}")
 
         # Lowercase all columns
         df.columns = [c.lower() for c in df.columns]
@@ -85,8 +101,8 @@ async def fetch_from_yfinance(
         logger.info(f"Fetched {len(df)} rows for {formatted}")
         return df
 
-    loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, _fetch)
+
 # ─────────────────────────────────────────
 # MAIN FETCHER with fallback chain
 # ─────────────────────────────────────────
@@ -108,7 +124,7 @@ async def get_historical_data(
             return df
 
     sources = [
-    ("yfinance", lambda: fetch_from_yfinance(ticker, period, interval)),
+        ("yfinance", lambda: fetch_from_yfinance(ticker, period, interval)),
     ]
 
     last_error = None

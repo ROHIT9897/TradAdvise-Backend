@@ -1,10 +1,11 @@
 from pydantic_settings import BaseSettings
+from typing import Optional
 
 class Settings(BaseSettings):
     REDIS_URL: str
     NEWS_API_KEY: str
     ALPHA_VANTAGE_KEY: str = ""
-    SENTRY_DSN: str = ""
+    SENTRY_DSN: Optional[str] = None
     SECRET_KEY: str
 
     # Cache TTLs (seconds)
@@ -16,5 +17,7 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+	env_file_encoding = "utf-8"
+	case_senesitive = True
 
 settings = Settings()
