@@ -33,5 +33,5 @@ slowapi==0.1.9
 sentry-sdk[fastapi]==1.39.2
 
 # ── Pydantic (FastAPI dependency) ─────────────────────────
-pydantic==2.5.3
-pydantic-settings==2.1.0
+pydantic==2.7.4
+pydantic-settings==2.3.4
