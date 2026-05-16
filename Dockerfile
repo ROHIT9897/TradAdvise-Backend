@@ -8,6 +8,13 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
+
+# Pehle torch CPU version install karo
+RUN pip install --no-cache-dir \
+    torch==2.1.2 \
+    --index-url https://download.pytorch.org/whl/cpu
+
+# Phir baaki sab install karo
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
