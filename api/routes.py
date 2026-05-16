@@ -1,53 +1,36 @@
+# api/routes.py
+import asyncio
+import traceback
 from fastapi import APIRouter, HTTPException, Request
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from ml.predictor import get_full_prediction, train_model_for_ticker
 from data.live_price import get_live_price, get_top_gainers_losers
 from data.news_fetcher import get_stock_news
-from data.fetcher import get_historical_data          # ADD THIS
-from cache.redis_client import cache                  # ADD THIS
+from data.fetcher import get_historical_data
+from cache.redis_client import cache
 
 router = APIRouter()
 limiter = Limiter(key_func=get_remote_address)
 
+# ── Full AI prediction ────────────────────────────────────
+
 @router.get("/analyze/{ticker}")
 @limiter.limit("15/minute")
 async def analyze(ticker: str, request: Request):
-    import traceback
-
     try:
         result = await get_full_prediction(ticker.upper())
         return result
-
-    except FileNotFoundError as e:
-        # Model not trained yet
+    except FileNotFoundError:
         raise HTTPException(
             status_code=404,
-            detail={
-                "error": "Model not trained",
-                "message": f"No model found for {ticker}. Call POST /train/{ticker} first.",
-                "fix": f"Run: curl -X POST http://localhost:8000/api/v1/train/{ticker}"
-            }
-        )
-    except ValueError as e:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "Data error",
-                "message": str(e)
-            }
+            detail=f"No model for {ticker}. Call POST /train/{ticker} first."
         )
     except Exception as e:
-        # Print full traceback to your terminal
         traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "Internal server error",
-                "message": str(e),
-                "hint": "Check uvicorn terminal for full traceback"
-            }
-        )
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ── Live price ────────────────────────────────────────────
 
 @router.get("/price/{ticker}")
 @limiter.limit("30/minute")
@@ -57,6 +40,8 @@ async def live_price(ticker: str, request: Request):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# ── News + sentiment ──────────────────────────────────────
+
 @router.get("/news/{ticker}")
 @limiter.limit("10/minute")
 async def news(ticker: str, request: Request):
@@ -64,6 +49,8 @@ async def news(ticker: str, request: Request):
         return await get_stock_news(ticker.upper())
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# ── Market movers ─────────────────────────────────────────
 
 @router.get("/market/movers")
 @limiter.limit("10/minute")
@@ -73,47 +60,22 @@ async def market_movers(request: Request):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/train/{ticker}")
-async def train(ticker: str):
-    try:
-        result = await train_model_for_ticker(ticker.upper())
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/health")
-async def health():
-    from cache.redis_client import cache
-    return {
-        "status": "ok",
-        "redis": await cache.ping()
-    }
-
-# Add this to api/routes.py temporarily
-@router.delete("/cache/flush")
-async def flush_cache():
-    from cache.redis_client import cache
-    await cache.client.flushall()
-    return {"status": "cache cleared"}
+# ── Chart data ────────────────────────────────────────────
 
 @router.get("/chart/{ticker}")
 @limiter.limit("20/minute")
 async def get_chart_data(
-    ticker: str,
-    period: str = "1mo",
-    request: Request = None
+    ticker:  str,
+    request: Request,
+    period:  str = "1M",        # default 1M
 ):
-    """
-    Returns OHLCV price data for charting.
-    period options: 7d, 1mo, 3mo, 6mo, 1y
-    """
     cache_key = f"chart:{ticker}:{period}"
     cached    = await cache.get(cache_key)
     if cached:
         return cached
 
     try:
-        # Map frontend period to yfinance period
+        # Maps EXACTLY what Android sends → yfinance period
         period_map = {
             "1W": ("7d",  "1d"),
             "1M": ("1mo", "1d"),
@@ -121,20 +83,22 @@ async def get_chart_data(
             "6M": ("6mo", "1d"),
             "1Y": ("1y",  "1wk"),
         }
-        yf_period, interval = period_map.get(period, ("1mo", "1d"))
+        yf_period, interval = period_map.get(
+            period.upper(),
+            ("1mo", "1d")       # fallback if unknown period sent
+        )
 
         df = await get_historical_data(
             ticker,
-            period   = yf_period,
-            interval = interval,
+            period    = yf_period,
+            interval  = interval,
             use_cache = False
         )
 
-        # Build response
         prices = []
         for date, row in df.iterrows():
             prices.append({
-                "date":   str(date)[:10],   # YYYY-MM-DD only
+                "date":   str(date)[:10],
                 "open":   round(float(row["open"]),   2),
                 "high":   round(float(row["high"]),   2),
                 "low":    round(float(row["low"]),    2),
@@ -149,10 +113,35 @@ async def get_chart_data(
             "prices": prices
         }
 
-        # Cache based on period
         ttl = 300 if period == "1W" else 3600
         await cache.set(cache_key, result, ttl)
         return result
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# ── Train model ───────────────────────────────────────────
+
+@router.post("/train/{ticker}")
+async def train(ticker: str):
+    try:
+        result = await train_model_for_ticker(ticker.upper())
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ── Health check ──────────────────────────────────────────
+
+@router.get("/health")
+async def health():
+    return {
+        "status": "ok",
+        "redis":  await cache.ping()
+    }
+
+# ── Cache flush (dev only) ────────────────────────────────
+
+@router.delete("/cache/flush")
+async def flush_cache():
+    await cache.client.flushall()
+    return {"status": "cache cleared"}
