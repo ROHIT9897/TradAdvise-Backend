@@ -174,57 +174,57 @@ def _analyze_horizon(
 
     # ── Reasoning ─────────────────────────────────────────
     # ── Reasoning ─────────────────────────────────────
-reasoning = []
+    reasoning = []
 
-# Trend
-if current_price > ma200:
-    reasoning.append("Price above 200-day average — strong uptrend")
-elif current_price > ma50:
-    reasoning.append("Price above 50-day average — uptrend intact")
-elif current_price < ma50:
-    reasoning.append("Price below 50-day average — caution advised")
+    # Trend
+    if current_price > ma200:
+        reasoning.append("Price above 200-day average — strong uptrend")
+    elif current_price > ma50:
+        reasoning.append("Price above 50-day average — uptrend intact")
+    elif current_price < ma50:
+        reasoning.append("Price below 50-day average — caution advised")
 
-# RSI
-if rsi < 35:
-    reasoning.append(f"RSI {rsi:.0f} — stock is oversold, good entry point")
-elif rsi < 50:
-    reasoning.append(f"RSI {rsi:.0f} — neutral zone, room to grow")
-elif rsi > 70:
-    reasoning.append(f"RSI {rsi:.0f} — overbought, wait for pullback")
+    # RSI
+    if rsi < 35:
+        reasoning.append(f"RSI {rsi:.0f} — stock is oversold, good entry point")
+    elif rsi < 50:
+        reasoning.append(f"RSI {rsi:.0f} — neutral zone, room to grow")
+    elif rsi > 70:
+        reasoning.append(f"RSI {rsi:.0f} — overbought, wait for pullback")
 
-# 52-week position
-if range_pos < 0.25:
-    reasoning.append("Near 52-week low — limited downside risk")
-elif range_pos > 0.85:
-    reasoning.append("Near 52-week high — momentum strong but risky")
-elif 0.4 < range_pos < 0.6:
-    reasoning.append("Mid-range position — balanced risk/reward")
+    # 52-week position
+    if range_pos < 0.25:
+        reasoning.append("Near 52-week low — limited downside risk")
+    elif range_pos > 0.85:
+        reasoning.append("Near 52-week high — momentum strong but risky")
+    elif 0.4 < range_pos < 0.6:
+        reasoning.append("Mid-range position — balanced risk/reward")
 
-# Historical performance
-if past_returns and win_rate > 0.6:
-    reasoning.append(
-        f"Profitable {win_rate*100:.0f}% of past {days}-day periods"
-    )
-elif past_returns and win_rate > 0.5:
-    reasoning.append(
-        f"Positive returns {win_rate*100:.0f}% of past {days}-day periods"
-    )
+    # Historical performance
+    if past_returns and win_rate > 0.6:
+        reasoning.append(
+            f"Profitable {win_rate*100:.0f}% of past {days}-day periods"
+        )
+    elif past_returns and win_rate > 0.5:
+        reasoning.append(
+            f"Positive returns {win_rate*100:.0f}% of past {days}-day periods"
+        )
 
-# Volatility warning
-if volatility > 0.35:
-    reasoning.append("High volatility — use strict stop loss")
-elif volatility < 0.2:
-    reasoning.append("Low volatility — stable stock, good for long term")
+    # Volatility warning
+    if volatility > 0.35:
+        reasoning.append("High volatility — use strict stop loss")
+    elif volatility < 0.2:
+        reasoning.append("Low volatility — stable stock, good for long term")
 
-# Volume
-if vol_today > vol_avg * 1.5:
-    reasoning.append("High volume today — strong market interest")
+    # Volume
+    if vol_today > vol_avg * 1.5:
+        reasoning.append("High volume today — strong market interest")
 
-return {
-    "upside_pct":   upside_pct,
-    "downside_pct": downside_pct,
-    "confidence":   confidence,
-    "signal":       signal,
-    "risk_level":   risk,
-    "reasoning":    reasoning[:4],  # max 4 points
-}
+    return{
+        "upside_pct":   upside_pct,
+        "downside_pct": downside_pct,
+        "confidence":   confidence,
+        "signal":       signal,
+        "risk_level":   risk,
+        "reasoning":    reasoning[:4],  # max 4 points
+    }
