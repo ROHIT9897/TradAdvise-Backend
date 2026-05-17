@@ -9,6 +9,7 @@ from data.live_price import get_live_price, get_top_gainers_losers
 from data.news_fetcher import get_stock_news
 from data.fetcher import get_historical_data
 from cache.redis_client import cache
+from ml.horizon_predictor import get_horizon_prediction
 
 router = APIRouter()
 limiter = Limiter(key_func=get_remote_address)
@@ -145,3 +146,19 @@ async def health():
 async def flush_cache():
     await cache.client.flushall()
     return {"status": "cache cleared"}
+
+@router.get("/predict/{ticker}")
+@limiter.limit("10/minute")
+async def predict_horizon(
+    ticker:   str,
+    request:  Request,
+    days:     int = 30,
+    strategy: str = "hold"
+):
+    try:
+        result = await get_horizon_prediction(
+            ticker.upper(), days, strategy
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
