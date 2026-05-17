@@ -228,3 +228,10 @@ def _analyze_horizon(
         "risk_level":   risk,
         "reasoning":    reasoning[:4],  # max 4 points
     }
+
+def _get_horizon_type(days: int) -> str:
+    if days <= 7:    return "Very Short Term"
+    if days <= 30:   return "Short Term"
+    if days <= 90:   return "Medium Term"
+    if days <= 180:  return "Long Term"
+    return "Very Long Term"
