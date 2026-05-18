@@ -10,6 +10,7 @@ from data.news_fetcher import get_stock_news
 from data.fetcher import get_historical_data
 from cache.redis_client import cache
 from ml.horizon_predictor import get_horizon_prediction
+from ml.horizon_predictor import get_target_prediction
 
 router = APIRouter()
 limiter = Limiter(key_func=get_remote_address)
@@ -158,6 +159,26 @@ async def predict_horizon(
     try:
         result = await get_horizon_prediction(
             ticker.upper(), days, strategy
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/target/{ticker}")
+@limiter.limit("10/minute")
+async def predict_target(
+    ticker:       str,
+    request:      Request,
+    target_price: float,    # user ka goal
+    strategy:     str = "hold"
+):
+    """
+    User apna target price set karta hai.
+    App batata hai kitna time lagega aur chances kitne hain.
+    """
+    try:
+        result = await get_target_prediction(
+            ticker.upper(), target_price, strategy
         )
         return result
     except Exception as e:

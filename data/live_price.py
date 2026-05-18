@@ -4,6 +4,7 @@ import logging
 import asyncio
 from cache.redis_client import cache
 from config import settings
+from data.nse_stocks import TOP_LIQUID_STOCKS
 
 logger = logging.getLogger(__name__)
 
@@ -157,14 +158,14 @@ async def _price_from_history(ticker: str) -> dict:
         return None
 
 # ── Top gainers and losers ────────────────────────────────
+# data/live_price.py — REPLACE get_top_gainers_losers function only
 
 async def get_top_gainers_losers() -> dict:
-    NIFTY50 = [
-        "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK",
-        "SBIN", "BHARTIARTL", "WIPRO", "LT", "AXISBANK",
-        "KOTAKBANK", "HINDUNILVR", "ITC", "SUNPHARMA", "MARUTI",
-        "BAJFINANCE", "TITAN", "ASIANPAINT", "NESTLEIND", "PNB"
-    ]
+    """
+    Compare all liquid NSE stocks and return
+    top 10 gainers and top 10 losers.
+    """
+    from data.nse_stocks import TOP_LIQUID_STOCKS
 
     cache_key = "top_gainers_losers"
     cached    = await cache.get(cache_key)
@@ -172,23 +173,40 @@ async def get_top_gainers_losers() -> dict:
         return cached
 
     results = []
-    for t in NIFTY50:
-        try:
-            data = await get_live_price(t)
-            results.append(data)
-        except Exception as e:
-            logger.warning(f"Skipping {t}: {e}")
-            continue
+
+    # Fetch prices in parallel batches of 10
+    import asyncio
+    batch_size = 10
+
+    for i in range(0, len(TOP_LIQUID_STOCKS), batch_size):
+        batch = TOP_LIQUID_STOCKS[i:i + batch_size]
+        tasks = [get_live_price(t) for t in batch]
+
+        batch_results = await asyncio.gather(
+            *tasks,
+            return_exceptions=True
+        )
+
+        for result in batch_results:
+            if isinstance(result, dict):
+                results.append(result)
+
+        # Small delay between batches
+        if i + batch_size < len(TOP_LIQUID_STOCKS):
+            await asyncio.sleep(0.5)
 
     if not results:
         return {"top_gainers": [], "top_losers": []}
 
+    # Sort by change_pct
     results.sort(key=lambda x: x.get("change_pct", 0))
 
     output = {
-        "top_gainers": results[-5:][::-1],
-        "top_losers":  results[:5],
+        "top_gainers": results[-10:][::-1],  # Top 10 gainers
+        "top_losers":  results[:10],          # Top 10 losers
+        "total_compared": len(results),
     }
 
+    # Cache for 5 minutes
     await cache.set(cache_key, output, 300)
     return output

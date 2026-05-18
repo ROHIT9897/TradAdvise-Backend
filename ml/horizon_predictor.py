@@ -235,3 +235,127 @@ def _get_horizon_type(days: int) -> str:
     if days <= 90:   return "Medium Term"
     if days <= 180:  return "Long Term"
     return "Very Long Term"
+
+async def get_target_prediction(
+    ticker:       str,
+    target_price: float,
+    strategy:     str = "hold"
+) -> dict:
+    """
+    Given a target price, predict:
+    - How many days to reach it
+    - Probability of reaching it
+    - Best/worst case timeline
+    """
+    df = await get_historical_data(ticker, period="2y")
+    if len(df) < 50:
+        raise ValueError(f"Not enough data for {ticker}")
+
+    current_price = float(df["close"].iloc[-1])
+    required_return = ((target_price - current_price) / current_price) * 100
+
+    # Validate target
+    if strategy == "hold" and target_price <= current_price:
+        raise ValueError(
+            f"Target ₹{target_price} must be above current ₹{current_price:.2f}"
+        )
+    if strategy == "sell" and target_price >= current_price:
+        raise ValueError(
+            f"Target ₹{target_price} must be below current ₹{current_price:.2f}"
+        )
+
+    # ── Historical analysis ───────────────────────────────
+    close      = df["close"]
+    returns    = close.pct_change().dropna()
+    daily_vol  = float(returns.std())
+    daily_mean = float(returns.mean())
+
+    # How many days historically did it take
+    # to move by required_return%?
+    days_to_target_list = []
+    required_move = abs(required_return) / 100
+
+    for i in range(len(df) - 1):
+        start_price = float(close.iloc[i])
+        for j in range(i + 1, min(i + 366, len(df))):
+            end_price = float(close.iloc[j])
+            actual_move = (end_price - start_price) / start_price
+            if strategy == "hold" and actual_move >= required_move:
+                days_to_target_list.append(j - i)
+                break
+            elif strategy == "sell" and actual_move <= -required_move:
+                days_to_target_list.append(j - i)
+                break
+
+    # Calculate stats from historical data
+    if days_to_target_list:
+        avg_days  = int(np.mean(days_to_target_list))
+        best_days = int(np.percentile(days_to_target_list, 10))
+        worst_days = int(np.percentile(days_to_target_list, 90))
+        probability = min(
+            int(len(days_to_target_list) / (len(df) - 1) * 100 * 1.5),
+            95
+        )
+    else:
+        # Use random walk model if no historical match
+        import math
+        avg_days   = int(abs(required_return) / (daily_mean * 100 * 252 / 252))
+        avg_days   = max(30, min(avg_days, 365))
+        best_days  = int(avg_days * 0.6)
+        worst_days = int(avg_days * 1.8)
+        probability = max(25, min(70, int(60 - abs(required_return) * 1.5)))
+
+    today         = datetime.now()
+    expected_date = today + timedelta(days=avg_days)
+    best_date     = today + timedelta(days=best_days)
+    worst_date    = today + timedelta(days=worst_days)
+    notify_price  = current_price + (target_price - current_price) * 0.85
+
+    # Risk level
+    if abs(required_return) > 30:   risk = "Very High"
+    elif abs(required_return) > 20: risk = "High"
+    elif abs(required_return) > 10: risk = "Medium"
+    else:                           risk = "Low"
+
+    # Reasoning
+    reasoning = []
+    if probability > 60:
+        reasoning.append(
+            f"Historically achieved {required_return:.1f}% return "
+            f"{probability}% of the time"
+        )
+    if best_days < 30:
+        reasoning.append(f"Best case: target in just {best_days} days")
+    if daily_vol > 0.02:
+        reasoning.append("High volatility — target reachable but risky")
+    else:
+        reasoning.append("Low volatility — steady progress expected")
+    if avg_days > 180:
+        reasoning.append("Long horizon — patience required")
+
+    return {
+        "ticker":          ticker,
+        "strategy":        strategy,
+        "current_price":   round(current_price, 2),
+        "target_price":    round(target_price, 2),
+        "required_return": round(required_return, 2),
+
+        # Timeline
+        "expected_days":   avg_days,
+        "best_case_days":  best_days,
+        "worst_case_days": worst_days,
+        "expected_date":   expected_date.strftime("%d %b %Y"),
+        "best_date":       best_date.strftime("%d %b %Y"),
+        "worst_date":      worst_date.strftime("%d %b %Y"),
+
+        # Probability
+        "probability":     probability,
+        "risk_level":      risk,
+
+        # Alert
+        "notify_at_price": round(notify_price, 2),
+        "notify_pct":      85,
+
+        "reasoning":       reasoning[:4],
+    }
+
